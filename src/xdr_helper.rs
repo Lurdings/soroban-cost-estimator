@@ -266,18 +266,10 @@ pub fn validate_args_against_spec(
 
     let mut scvals = Vec::with_capacity(args.len());
     for (arg, param) in args.iter().zip(&fn_info.params) {
-        let (key, value) = arg.split_once('=').ok_or_else(|| {
-            AppError::TypeValidation(format!(
-                "argument '{}' for parameter '{}' must be in KEY=VAL format",
-                arg, param.name
-            ))
-        })?;
-        if key != param.name {
-            return Err(AppError::TypeValidation(format!(
-                "argument key '{}' does not match parameter '{}'",
-                key, param.name
-            )));
-        }
+        let value = match arg.split_once('=') {
+            Some((_, value)) => value,
+            None => arg.as_str(),
+        };
         let scval = parse_arg_value_with_type(&param.type_def, value)?;
         scvals.push(scval);
     }
