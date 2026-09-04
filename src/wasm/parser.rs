@@ -264,7 +264,7 @@ pub fn parse_contract_spec(bytes: &[u8]) -> AppResult<(SpecFunctions, bool)> {
             let mut cursor = Cursor::new(data);
             while (cursor.position() as usize) < data.len() {
                 let mut limited =
-                    stellar_xdr::Limited::new(&mut cursor, stellar_xdr::Limits::none());
+                    stellar_xdr::Limited::new(&mut cursor, stellar_xdr::Limits::unlimited());
                 // Break (not `?`) on a decode error: a trailing byte or a
                 // truncated final entry should not discard the entries already
                 // decoded. If nothing decoded, the caller's `unwrap_or_default`
