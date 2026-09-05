@@ -288,15 +288,15 @@ fn parse_arg_value_with_type(
     use stellar_xdr::ScSpecTypeDef;
     match type_def {
         ScSpecTypeDef::I64 => {
-            let v = value
-                .parse::<i64>()
-                .map_err(|_| AppError::TypeValidation(format!("cannot parse '{}' as i64", value)))?;
+            let v = value.parse::<i64>().map_err(|_| {
+                AppError::TypeValidation(format!("cannot parse '{}' as i64", value))
+            })?;
             Ok(stellar_xdr::ScVal::I64(v))
         }
         ScSpecTypeDef::U64 => {
-            let v = value
-                .parse::<u64>()
-                .map_err(|_| AppError::TypeValidation(format!("cannot parse '{}' as u64", value)))?;
+            let v = value.parse::<u64>().map_err(|_| {
+                AppError::TypeValidation(format!("cannot parse '{}' as u64", value))
+            })?;
             Ok(stellar_xdr::ScVal::U64(v))
         }
         ScSpecTypeDef::Bool => {
@@ -307,7 +307,7 @@ fn parse_arg_value_with_type(
                     return Err(AppError::TypeValidation(format!(
                         "cannot parse '{}' as bool",
                         value
-                    )))
+                    )));
                 }
             };
             Ok(stellar_xdr::ScVal::Bool(v))
