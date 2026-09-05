@@ -168,18 +168,31 @@ impl Command {
 
                 let spec = crate::wasm::parser::get_function_spec(wasm, func_name)?
                     .ok_or_else(|| {
-                        AppError::General(format!("function '{}' not found in contract spec", func_name))
+                        AppError::General(format!(
+                            "function '{}' not found in contract spec",
+                            func_name
+                        ))
                     })?;
 
                 let mut vals = Vec::with_capacity(args.len());
                 for arg in args {
                     let (key, value) = arg.split_once('=').ok_or_else(|| {
-                        AppError::TypeValidation(format!("invalid argument '{}', expected KEY=VAL", arg))
+                        AppError::TypeValidation(format!(
+                            "invalid argument '{}', expected KEY=VAL",
+                            arg
+                        ))
                     })?;
 
-                    let input = spec.inputs().iter().find(|input| input.name() == key).ok_or_else(|| {
-                        AppError::TypeValidation(format!("unknown argument '{}' for function '{}'", key, func_name))
-                    })?;
+                    let input = spec
+                        .inputs()
+                        .iter()
+                        .find(|input| input.name() == key)
+                        .ok_or_else(|| {
+                            AppError::TypeValidation(format!(
+                                "unknown argument '{}' for function '{}'",
+                                key, func_name
+                            ))
+                        })?;
 
                     let expected = match input.type_def() {
                         ScSpecTypeDef::Bool => "bool",
@@ -189,7 +202,8 @@ impl Command {
                         ScSpecTypeDef::Symbol => "symbol",
                         _ => return Err(AppError::TypeValidation(format!(
                             "unsupported parameter type for '{}': {:?}",
-                            key, input.type_def()
+                            key,
+                            input.type_def()
                         ))),
                     };
 
@@ -337,24 +351,30 @@ fn coerce_arg_value(raw: &str, expected: &str, param_name: &str) -> AppResult<Sc
         "bool" => raw
             .parse::<bool>()
             .map(ScVal::Bool)
-            .map_err(| _ | AppError::TypeValidation(format!(
-                "argument '{}' expected bool, got '{}'",
-                param_name, raw
-            ))),
+            .map_err(|_| {
+                AppError::TypeValidation(format!(
+                    "argument '{}' expected bool, got '{}'",
+                    param_name, raw
+                ))
+            }),
         "i64" => raw
             .parse::<i64>()
             .map(ScVal::I64)
-            .map_err(| _ | AppError::TypeValidation(format!(
-                "argument '{}' expected i64, got '{}'",
-                param_name, raw
-            ))),
+            .map_err(|_| {
+                AppError::TypeValidation(format!(
+                    "argument '{}' expected i64, got '{}'",
+                    param_name, raw
+                ))
+            }),
         "u64" => raw
             .parse::<u64>()
             .map(ScVal::U64)
-            .map_err(| _ | AppError::TypeValidation(format!(
-                "argument '{}' expected u64, got '{}'",
-                param_name, raw
-            ))),
+            .map_err(|_| {
+                AppError::TypeValidation(format!(
+                    "argument '{}' expected u64, got '{}'",
+                    param_name, raw
+                ))
+            }),
         "string" => Ok(ScVal::String(raw.to_string())),
         "symbol" => Ok(ScVal::Symbol(raw.to_string())),
         other => Err(AppError::TypeValidation(format!(
