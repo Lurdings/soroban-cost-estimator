@@ -570,11 +570,13 @@ pub fn coerce_arg_scval(
             if !is_valid_symbol(value) {
                 return Err(invalid());
             }
-            Some(ScVal::Symbol(stellar_xdr::ScSymbol(value.as_bytes().to_vec())))
+            Some(ScVal::Symbol(stellar_xdr::ScSymbol(
+                value.as_bytes().to_vec(),
+            )))
         }
-        stellar_xdr::ScSpecTypeDef::String => Some(ScVal::String(
-            stellar_xdr::ScString(value.as_bytes().to_vec()),
-        )),
+        stellar_xdr::ScSpecTypeDef::String => Some(ScVal::String(stellar_xdr::ScString(
+            value.as_bytes().to_vec(),
+        ))),
         // Types with no trivial text->ScVal mapping are left to the caller's
         // inference fallback.
         _ => None,
@@ -790,10 +792,7 @@ mod tests {
 
     #[test]
     fn coerces_i64_args() {
-        assert_eq!(
-            coerce(ScSpecTypeDef::I64, "step=5"),
-            Some(ScVal::I64(5))
-        );
+        assert_eq!(coerce(ScSpecTypeDef::I64, "step=5"), Some(ScVal::I64(5)));
     }
 
     #[test]
@@ -824,7 +823,9 @@ mod tests {
     fn coerces_symbol_args() {
         assert_eq!(
             coerce(ScSpecTypeDef::Symbol, "symbol=hello_world"),
-            Some(ScVal::Symbol(stellar_xdr::ScSymbol(b"hello_world".to_vec())))
+            Some(ScVal::Symbol(stellar_xdr::ScSymbol(
+                b"hello_world".to_vec()
+            )))
         );
     }
 }
