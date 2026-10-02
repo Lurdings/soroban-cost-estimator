@@ -1,7 +1,41 @@
+use clap::builder::{PossibleValue, TypedValueParser};
 use clap::{Parser, Subcommand, ValueEnum};
 use soroban_spec_types::{ScVal, ScSpecTypeDef};
 
 use crate::error::{AppError, AppResult};
+
+/// Value parser for `--network` that advertises the supported network names to
+/// shell completion generators and `--help` output while still accepting any
+/// value at runtime, preserving the existing `AppError`-based handling of
+/// unknown networks (issue #270).
+#[derive(Clone)]
+struct NetworkValueParser;
+
+impl TypedValueParser for NetworkValueParser {
+    type Value = String;
+
+    fn parse_ref(
+        &self,
+        _cmd: &clap::Command,
+        _arg: Option<&clap::Arg>,
+        value: &std::ffi::OsStr,
+    ) -> Result<Self::Value, clap::Error> {
+        value.to_str().map(str::to_owned).ok_or_else(|| {
+            clap::Error::raw(
+                clap::error::ErrorKind::InvalidUtf8,
+                "invalid UTF-8: network value must be valid UTF-8",
+            )
+        })
+    }
+
+    fn possible_values(&self) -> Option<Box<dyn Iterator<Item = PossibleValue> + '_>> {
+        Some(Box::new(
+            ["testnet", "mainnet", "futurenet", "local"]
+                .iter()
+                .map(|&name| PossibleValue::new(name)),
+        ))
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
 #[value(rename_all = "lower")]
@@ -68,6 +102,13 @@ pub struct Cli {
     /// network call).
     #[arg(long, global = true, value_name = "SECS", default_value_t = 30)]
     pub timeout: u64,
+
+    /// TCP connection establishment timeout for RPC calls, in seconds. Bounds
+    /// only the initial connect — a dead or unreachable host fails within
+    /// this window instead of hanging for the full --timeout. 0 disables it
+    /// (connect attempts then fall under --timeout alone).
+    #[arg(long, global = true, value_name = "SECS", default_value_t = 5)]
+    pub connect_timeout: u64,
 
     /// Enable debug-level logging, including full RPC request payloads and
     /// response summaries.
@@ -136,7 +177,7 @@ pub enum Command {
     Estimate {
         #[arg(long, short)]
         wasm: String,
-        #[arg(long, default_value = "testnet")]
+        #[arg(long, default_value = "testnet", value_parser = NetworkValueParser)]
         network: String,
         #[arg(long)]
         rpc_url: Option<String>,
@@ -147,13 +188,33 @@ pub enum Command {
 /// Function arguments as key=value pairs (value is coerced to the contract-spec type when available).
         #[arg(long = "arg", value_name = "KEY=VAL")]
         args: Vec<String>,
+
+        /// Prompt interactively for the function and its arguments, using
+        /// the contract spec for names and types. Explicit `--fn`/`--arg`
+        /// values take precedence; the prompt only fills in the gaps.
+        #[arg(long, short = 'i')]
+        interactive: bool,
+
+        /// Skip re-simulation when a cached estimate is still fresh
+        /// (e.g. "30m", "1h", "7d"; bare value = seconds).
         #[arg(long, value_name = "DURATION")]
         cache_ttl: Option<String>,
+
+        /// Show the cost difference against the previous cached estimate for
+        /// the same function and arguments (CPU, memory, ledger I/O, and fee).
+        #[arg(long)]
+        compare: bool,
 
         /// Wipe this network's cached estimates before running the
         /// simulation (e.g. after upgrading the tool or a network upgrade).
         #[arg(long)]
         clear_cache: bool,
+
+        /// Bypass the estimate cache entirely: never read a cached estimate
+        /// (including under `--cache-ttl`) and never write the fresh result
+        /// back to disk.
+        #[arg(long)]
+        no_cache: bool,
 
         /// Output as JSON instead of a human-readable table.
         #[arg(long)]
@@ -198,7 +259,7 @@ pub enum Command {
     EstimateAll {
         #[arg(long, short)]
         wasm: String,
-        #[arg(long, default_value = "testnet")]
+        #[arg(long, default_value = "testnet", value_parser = NetworkValueParser)]
         network: String,
 
         /// Deployed contract ID (TE8 hex chars) to invoke each function against.
@@ -209,6 +270,17 @@ pub enum Command {
         /// Deployed contract ID (64 hex chars) to invoke each function against.
         #[arg(long)]
         id: Option<String>,
+
+        /// Bypass the estimate cache entirely: never read cached estimates
+        /// and never write fresh results back to disk.
+        #[arg(long)]
+        no_cache: bool,
+
+        /// Restrict estimation to these function names (repeatable). When
+        /// omitted, every exported function is estimated.
+        #[arg(long = "fn", value_name = "NAME")]
+        fn_names: Vec<String>,
+
         #[arg(long)]
         json: bool,
 
@@ -232,7 +304,7 @@ pub enum Command {
         action: CacheAction,
     },
     Watch {
-        #[arg(long, default_value = "testnet")]
+        #[arg(long, default_value = "testnet", value_parser = NetworkValueParser)]
         network: String,
         #[arg(long, default_value = "1h")]
         interval: String,
@@ -241,7 +313,7 @@ pub enum Command {
         threshold_percent: Option<f64>,
     },
 
-    /// Generate shell completion scripts for Bash, Zsh, Fish, and PowerShell.
+    /// Generate shell completion scripts for Bash, Zsh, Fish, PowerShell, and Elvish.
     Completions {
         /// Target shell for completion script generation.
         #[arg(value_enum)]
@@ -316,17 +388,24 @@ impl Command {
 
 #[derive(Subcommand, Debug)]
 pub enum CacheAction {
-    /// Export every cached estimate as a JSON array.
+    /// Export cached estimates as a versioned JSON document (schema
+    /// version, export timestamp, and estimate records) for backup or
+    /// sharing across workstations.
     Export {
-        /// Write the JSON array to a file instead of standard output.
+        /// Write the JSON export to a file instead of standard output.
         #[arg(long, short)]
         out: Option<String>,
+
+        /// Only export estimates recorded for this network (default: all
+        /// networks).
+        #[arg(long)]
+        network: Option<String>,
     },
 
     /// List every cached estimate for a network (newest first).
     List {
         /// Network whose cached estimates to list.
-        #[arg(long, default_value = "testnet")]
+        #[arg(long, default_value = "testnet", value_parser = NetworkValueParser)]
         network: String,
 
         /// Output the full cached-estimate records as a JSON array.
@@ -340,7 +419,7 @@ pub enum CacheAction {
     /// Delete every cached estimate recorded for a network.
     Clear {
         /// Network whose cached estimates to delete.
-        #[arg(long, default_value = "testnet")]
+        #[arg(long, default_value = "testnet", value_parser = NetworkValueParser)]
         network: String,
     },
 
@@ -348,7 +427,7 @@ pub enum CacheAction {
     Warm {
         #[arg(long, short)]
         wasm: String,
-        #[arg(long, default_value = "testnet")]
+        #[arg(long, default_value = "testnet", value_parser = NetworkValueParser)]
         network: String,
 
         /// Explicit RPC URL (overrides network-based resolution).
@@ -411,26 +490,39 @@ pub enum CacheAction {
 
 #[derive(Subcommand, Debug)]
 pub enum ConfigAction {
+    /// Fetch all ConfigSetting entries and save a timestamped snapshot.
+    ///
+    /// Subcommands manage snapshots already on disk instead of fetching a new
+    /// one, so they are mutually exclusive with this command's own flags.
+    #[command(args_conflicts_with_subcommands = true)]
     Snapshot {
-        #[arg(long, default_value = "testnet")]
+        #[arg(long, default_value = "testnet", value_parser = NetworkValueParser)]
         network: String,
 /// Explicit output path (defaults to ~/.soroban-cost-estimator/.snapshots/).
         #[arg(long)]
         out: Option<String>,
         #[arg(long)]
         json: bool,
+
+        /// Keep only the N most recent snapshots for the network, deleting
+        /// older ones once the new snapshot is safely on disk.
+        #[arg(long, value_name = "COUNT")]
+        retain: Option<usize>,
+
+        #[command(subcommand)]
+        action: Option<SnapshotAction>,
     },
 
     /// List all saved config snapshots with their timestamp and ledger.
     List {
         /// Network whose snapshots to list.
-        #[arg(long, default_value = "testnet")]
+        #[arg(long, default_value = "testnet", value_parser = NetworkValueParser)]
         network: String,
     },
 
     /// Diff the current network config against the most recent snapshot.
     Diff {
-        #[arg(long, default_value = "testnet")]
+        #[arg(long, default_value = "testnet", value_parser = NetworkValueParser)]
         network: String,
         #[arg(long)]
         against: Option<String>,
@@ -455,18 +547,30 @@ pub enum ConfigAction {
         /// Output as JSON instead of a human-readable diff.
         #[arg(long)]
         json: bool,
+
+        /// Force exit code 0 even when pricing changes are detected.
+        /// Useful for informative CI reports that must not fail the build.
+        /// Takes precedence over `--fail-on-any-change`.
+        #[arg(long)]
+        ignore_pricing_exit: bool,
+
+        /// Exit with code 1 when any config setting changed, even
+        /// non-pricing settings (caps, limits, window sizes). By default
+        /// only pricing changes trigger a non-zero exit.
+        #[arg(long)]
+        fail_on_any_change: bool,
     },
     History {
-        #[arg(long, default_value = "testnet")]
+        #[arg(long, default_value = "testnet", value_parser = NetworkValueParser)]
         network: String,
     },
     LastChanged {
 /// Network whose snapshots to inspect.
-        #[arg(long, default_value = "testnet")]
+        #[arg(long, default_value = "testnet", value_parser = NetworkValueParser)]
         network: String,
     },
     Validate {
-        #[arg(long, default_value = "testnet")]
+        #[arg(long, default_value = "testnet", value_parser = NetworkValueParser)]
         network: String,
     },
 
@@ -491,6 +595,31 @@ pub enum ConfigAction {
     Cache {
         #[command(subcommand)]
         action: CacheAction,
+    },
+}
+
+/// Retention sub-actions under `config snapshot`.
+///
+/// These operate purely on snapshots already on disk and never fetch a new
+/// one, which is why they carry their own `--network` rather than inheriting
+/// the parent command's.
+#[derive(Subcommand, Debug)]
+pub enum SnapshotAction {
+    /// Delete stored snapshots older than a number of days.
+    ///
+    /// The newest snapshot is always kept, however old it is.
+    Prune {
+        /// Network whose snapshots should be pruned.
+        #[arg(long, default_value = "testnet")]
+        network: String,
+
+        /// Delete snapshots recorded more than this many days ago.
+        #[arg(long, value_name = "DAYS")]
+        older_than: u32,
+
+        /// Output as JSON instead of a human-readable summary.
+        #[arg(long)]
+        json: bool,
     },
 }
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -591,6 +720,33 @@ mod tests {
             chart_width_for(false, true, None),
             Some(DEFAULT_CHART_WIDTH)
         );
+    }
+
+    /// AC for #270: generating a completion script for every supported shell
+    /// must produce valid, non-empty output without panicking.
+    #[test]
+    fn test_completion_script_generation_all_shells() {
+        use clap::CommandFactory;
+
+        let mut cmd = Cli::command();
+        let bin_name = cmd.get_name().to_string();
+
+        for shell in [
+            clap_complete::Shell::Bash,
+            clap_complete::Shell::Zsh,
+            clap_complete::Shell::Fish,
+            clap_complete::Shell::PowerShell,
+            clap_complete::Shell::Elvish,
+        ] {
+            let mut buffer: Vec<u8> = Vec::new();
+            clap_complete::generate(shell, &mut cmd, &bin_name, &mut buffer);
+            let script = String::from_utf8(buffer).expect("completion script should be UTF-8");
+            assert!(!script.is_empty(), "empty completion script for {shell:?}");
+            assert!(
+                script.contains(&bin_name),
+                "completion script for {shell:?} should reference {bin_name}"
+            );
+        }
     }
 }
 
